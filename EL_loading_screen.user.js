@@ -1,13 +1,17 @@
 // ==UserScript==
 // @name         EL - Custom loading screen (Unity patch)
 // @namespace    https://github.com/NononoMO/Evercustom
-// @version      1.1.0
+// @version      1.2.0
 // @description  Replaces the Everlusting Life loading screen with custom art (random pick).
 // @match        https://gi.nutaku.com/play-frame/everlusting-life/*
 // @run-at       document-start
 // @sandbox      JavaScript
 // @grant        unsafeWindow
 // @grant        GM_xmlhttpRequest
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_deleteValue
+// @grant        GM_listValues
 // @connect      raw.githubusercontent.com
 // @connect      github.com
 // @connect      objects.githubusercontent.com
@@ -46,8 +50,36 @@
     const list = m.patches || [];
     const chosen = list[Math.floor(Math.random() * list.length)];
     log('manifest: build', m.build, '| release', m.release, '| chosen', chosen);
-    return { build: m.build, chosen, url: chosen ? RELEASES + m.release + '/' + chosen : null };
+    // Drop patches saved for older releases
+    for (const k of GM_listValues()) {
+      if (k.startsWith('patch:') && !k.startsWith('patch:' + m.release + '/')) GM_deleteValue(k);
+    }
+    return {
+      build: m.build, chosen,
+      key: chosen ? 'patch:' + m.release + '/' + chosen : null,
+      url: chosen ? RELEASES + m.release + '/' + chosen : null,
+    };
   });
+
+  // Patches are kept in Tampermonkey storage after the first download (one per release+name)
+  const toB64 = (u8) => {
+    let s = '';
+    for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+    return btoa(s);
+  };
+  const fromB64 = (b64) => {
+    const s = atob(b64), u8 = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) u8[i] = s.charCodeAt(i);
+    return u8;
+  };
+  const getPatch = async (p) => {
+    const saved = GM_getValue(p.key, null);
+    if (saved) { log('patch from local storage:', p.chosen); return fromB64(saved); }
+    const u8 = new Uint8Array(await gmGet(p.url, 'arraybuffer'));
+    try { GM_setValue(p.key, toB64(u8)); } catch (e) { log('could not store patch:', e); }
+    log('patch downloaded and stored:', p.chosen);
+    return u8;
+  };
 
   const gunzip = async (u8) =>
     new Uint8Array(await new Response(new Blob([u8]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
@@ -89,13 +121,19 @@
         log('game updated; manifest is for build', p.build, '→ original');
         return origFetch.call(this, input, init);
       }
-      const [dataBuf, patchBuf] = await Promise.all([
+      const [dataBuf, patch] = await Promise.all([
         origFetch.call(W, url).then((r) => r.arrayBuffer()),
-        gmGet(p.url, 'arraybuffer'),
+        getPatch(p),
       ]);
       let src = new Uint8Array(dataBuf);
       if (src[0] === 0x1f && src[1] === 0x8b) src = await gunzip(src);
-      const out = applyPatch(src, new Uint8Array(patchBuf));
+      let out;
+      try {
+        out = applyPatch(src, patch);
+      } catch (e) {
+        GM_deleteValue(p.key); // corrupt or stale copy: download again next time
+        throw e;
+      }
       log('patch applied ✔', p.chosen, out.length, 'bytes');
       return new Response(out, {
         status: 200,
