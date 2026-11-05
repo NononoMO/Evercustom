@@ -1,0 +1,12 @@
+{
+  "build": "2026_10_29_09_53",
+  "release": "build-2026_10_29_09_53",
+  "patches": [
+    "loading_1.elpatch",
+    "loading_2.elpatch",
+    "loading_3.elpatch",
+    "loading_4.elpatch",
+    "loading_5.elpatch",
+    "loading_6.elpatch"
+  ]
+}
